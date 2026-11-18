@@ -51,17 +51,37 @@ export default async function KitchenBookingsPage() {
   if (!user) redirect("/login");
   if (user.role !== Role.KITCHEN) redirect("/");
 
-  // Fetch relevant services: e.g. from past 7 days to upcoming 1 day
-  // Avoid dumping an unbounded historical database list.
-  const minDate = calendarDate(-7);
-  const maxDate = calendarDate(1);
+  const minRecentDate = calendarDate(-7);
+  const maxUpcomingDate = calendarDate(1);
 
+  // Fetch all services that either:
+  // 1. Fall within the primary window: past 7 days up to tomorrow (upcoming 1 day).
+  // 2. OR are older past services that still contain outstanding BOOKED bookings
+  //    (ensures historical unmarked bookings are never dropped).
   const services = await prisma.service.findMany({
     where: {
-      serviceDate: {
-        gte: minDate,
-        lte: maxDate,
-      },
+      OR: [
+        {
+          serviceDate: {
+            gte: minRecentDate,
+            lte: maxUpcomingDate,
+          },
+        },
+        {
+          serviceDate: {
+            lt: minRecentDate,
+          },
+          offerings: {
+            some: {
+              bookings: {
+                some: {
+                  status: BookingStatus.BOOKED,
+                },
+              },
+            },
+          },
+        },
+      ],
     },
     include: {
       offerings: {
@@ -109,7 +129,6 @@ export default async function KitchenBookingsPage() {
   );
 
   if (todayServices.length > 0) {
-    // Find today's active service (e.g. cutoff in the future)
     const upcomingToday = todayServices.find((s) => s.cutoffAt >= now);
     if (upcomingToday) {
       defaultServiceId = upcomingToday.id;
@@ -157,6 +176,7 @@ export default async function KitchenBookingsPage() {
       cutoffAtStr: service.cutoffAt.toISOString(),
       isToday,
       isCutoffPassed: now >= service.cutoffAt,
+      canMarkAttendance: service.serviceDate.getTime() <= todayMidnight,
       bookings,
     };
   });

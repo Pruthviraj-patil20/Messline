@@ -2,7 +2,22 @@
 
 import { useId, useMemo, useState, useTransition, useRef } from "react";
 import { BookingStatus } from "@prisma/client";
-import { markServedAction, reconcileServiceAction } from "@/app/actions";
+import {
+  markServedAction,
+  markNoShowAction,
+  reconcileServiceAction,
+} from "@/app/actions";
+
+const STATUS_LABELS: Record<string, string> = {
+  BOOKED: "Booked",
+  CANCELLED: "Cancelled",
+  SERVED: "Served",
+  NO_SHOW: "No-show",
+};
+
+function getStatusLabel(status: string): string {
+  return STATUS_LABELS[status] ?? status;
+}
 
 export type BookingRowData = {
   id: string;
@@ -22,6 +37,7 @@ export type ServiceGroupData = {
   cutoffAtStr: string; // ISO string
   isToday: boolean;
   isCutoffPassed: boolean;
+  canMarkAttendance: boolean; // serviceDate <= today
   bookings: BookingRowData[];
 };
 
@@ -44,7 +60,10 @@ export function KitchenCounterVerification({
   const [isConfirmOpen, setIsConfirmOpen] = useState(false);
 
   const [isPending, startTransition] = useTransition();
-  const [pendingBookingId, setPendingBookingId] = useState<string | null>(null);
+  const [pendingAction, setPendingAction] = useState<{
+    id: string;
+    type: "SERVED" | "NO_SHOW";
+  } | null>(null);
 
   const searchInputRef = useRef<HTMLInputElement>(null);
   const searchInputId = useId();
@@ -98,11 +117,11 @@ export function KitchenCounterVerification({
     });
   }, [selectedService, searchQuery]);
 
-  // Individual mark served action handler with optimistic/immediate client state update
+  // Individual mark served action handler with safe state update
   const handleMarkServed = (bookingId: string) => {
     setActionError(null);
     setActionSuccess(null);
-    setPendingBookingId(bookingId);
+    setPendingAction({ id: bookingId, type: "SERVED" });
 
     startTransition(async () => {
       try {
@@ -124,11 +143,46 @@ export function KitchenCounterVerification({
           );
           setActionSuccess("Booking marked as served.");
         }
-      } catch (err: unknown) {
-        setActionError(err instanceof Error ? err.message : "Error marking served");
+      } catch {
+        setActionError("An unexpected error occurred. Please try again.");
       } finally {
-        setPendingBookingId(null);
+        setPendingAction(null);
         // Retain search input focus so kitchen staff can immediately scan/search next student
+        searchInputRef.current?.focus();
+      }
+    });
+  };
+
+  // Individual mark no-show action handler
+  const handleMarkNoShow = (bookingId: string) => {
+    setActionError(null);
+    setActionSuccess(null);
+    setPendingAction({ id: bookingId, type: "NO_SHOW" });
+
+    startTransition(async () => {
+      try {
+        const result = await markNoShowAction(bookingId);
+        if (!result.ok) {
+          setActionError(result.error);
+        } else {
+          // Immediately update local row status to NO_SHOW without full page reload
+          setServicesData((prev) =>
+            prev.map((s) => {
+              if (s.id !== selectedService?.id) return s;
+              return {
+                ...s,
+                bookings: s.bookings.map((b) =>
+                  b.id === bookingId ? { ...b, status: BookingStatus.NO_SHOW } : b
+                ),
+              };
+            })
+          );
+          setActionSuccess("Booking marked as no-show.");
+        }
+      } catch {
+        setActionError("An unexpected error occurred. Please try again.");
+      } finally {
+        setPendingAction(null);
         searchInputRef.current?.focus();
       }
     });
@@ -167,10 +221,8 @@ export function KitchenCounterVerification({
             } as NO_SHOW.`
           );
         }
-      } catch (err: unknown) {
-        setActionError(
-          err instanceof Error ? err.message : "Bulk reconciliation failed"
-        );
+      } catch {
+        setActionError("An unexpected error occurred. Please try again.");
       } finally {
         searchInputRef.current?.focus();
       }
@@ -362,7 +414,14 @@ export function KitchenCounterVerification({
                   const isBooked = row.status === BookingStatus.BOOKED;
                   const isServed = row.status === BookingStatus.SERVED;
                   const isNoShow = row.status === BookingStatus.NO_SHOW;
-                  const isRowPending = isPending && pendingBookingId === row.id;
+                  const isServingThis =
+                    isPending &&
+                    pendingAction?.id === row.id &&
+                    pendingAction?.type === "SERVED";
+                  const isNoShowThis =
+                    isPending &&
+                    pendingAction?.id === row.id &&
+                    pendingAction?.type === "NO_SHOW";
 
                   return (
                     <li
@@ -396,28 +455,44 @@ export function KitchenCounterVerification({
                                 : "bg-neutral-50 text-neutral-500"
                             }`}
                           >
-                            {row.status}
+                            {getStatusLabel(row.status)}
                           </span>
                         </div>
                       </div>
 
                       <div className="flex items-center gap-2">
                         {isBooked ? (
-                          <button
-                            type="button"
-                            disabled={isPending}
-                            onClick={() => handleMarkServed(row.id)}
-                            className="rounded bg-neutral-900 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-neutral-800 focus:outline-none focus:ring-2 focus:ring-neutral-900 focus:ring-offset-1 disabled:opacity-50"
-                          >
-                            {isRowPending ? "Serving..." : "Mark Served"}
-                          </button>
+                          selectedService.canMarkAttendance ? (
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                disabled={isPending}
+                                onClick={() => handleMarkServed(row.id)}
+                                className="rounded bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-600 focus:ring-offset-1 disabled:opacity-50"
+                              >
+                                {isServingThis ? "Serving..." : "Served"}
+                              </button>
+                              <button
+                                type="button"
+                                disabled={isPending}
+                                onClick={() => handleMarkNoShow(row.id)}
+                                className="rounded border border-red-200 px-3 py-1.5 text-xs font-medium text-red-700 transition hover:bg-red-50 focus:outline-none focus:ring-2 focus:ring-red-400 focus:ring-offset-1 disabled:opacity-50"
+                              >
+                                {isNoShowThis ? "Saving..." : "No-show"}
+                              </button>
+                            </div>
+                          ) : (
+                            <span className="text-xs italic text-neutral-400">
+                              Future service
+                            </span>
+                          )
                         ) : (
                           <span className="text-xs font-medium text-neutral-400">
                             {isServed
                               ? "✓ Served"
                               : isNoShow
                               ? "Marked No-Show"
-                              : row.status}
+                              : getStatusLabel(row.status)}
                           </span>
                         )}
                       </div>

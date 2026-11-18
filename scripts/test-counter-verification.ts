@@ -1,6 +1,11 @@
 import assert from "node:assert";
 import { BookingStatus, Role } from "@prisma/client";
-import { getBookingToken } from "../lib/attendance";
+import {
+  getBookingToken,
+  getStatusLabel,
+  STATUS_LABELS,
+  AttendanceError,
+} from "../lib/attendance";
 import type { BookingRowData } from "../app/kitchen/bookings/counter-verification";
 
 console.log("Running unit & reconciliation tests for Issue #164...");
@@ -15,17 +20,6 @@ function it(desc: string, fn: () => void | Promise<void>) {
     if (res instanceof Promise) {
       throw new Error("Synchronous test expected in it()");
     }
-    passedTests++;
-    console.log(`  ✓ ${desc}`);
-  } catch (err: any) {
-    console.error(`  ✗ ${desc}:`, err.message);
-  }
-}
-
-async function itAsync(desc: string, fn: () => Promise<void>) {
-  totalTests++;
-  try {
-    await fn();
     passedTests++;
     console.log(`  ✓ ${desc}`);
   } catch (err: any) {
@@ -57,8 +51,19 @@ it("handles short or empty IDs safely without crashing", () => {
   assert.strictEqual(getBookingToken(undefined as any), "");
 });
 
-// 2. Headcount Calculation Tests
-console.log("\n2. Headcount calculations");
+// 2. Status Badge Labels
+console.log("\n2. Status Badge Labels");
+
+it("maps raw enum values to user-friendly labels matching student bookings page", () => {
+  assert.strictEqual(getStatusLabel(BookingStatus.BOOKED), "Booked");
+  assert.strictEqual(getStatusLabel(BookingStatus.SERVED), "Served");
+  assert.strictEqual(getStatusLabel(BookingStatus.NO_SHOW), "No-show");
+  assert.strictEqual(getStatusLabel(BookingStatus.CANCELLED), "Cancelled");
+  assert.strictEqual(STATUS_LABELS.NO_SHOW, "No-show");
+});
+
+// 3. Headcount Calculation Tests
+console.log("\n3. Headcount calculations");
 
 function computeHeadcount(bookings: BookingRowData[]) {
   let served = 0;
@@ -139,8 +144,8 @@ it("calculates Served, Remaining in Line, and No-Shows accurately", () => {
   assert.strictEqual(metrics.noShow, 1);
 });
 
-// 3. Search Filtering Tests
-console.log("\n3. Real-time Search filtering");
+// 4. Search Filtering Tests
+console.log("\n4. Real-time Search filtering");
 
 function filterBookings(bookings: BookingRowData[], searchQuery: string): BookingRowData[] {
   const query = searchQuery.trim().toLowerCase();
@@ -202,8 +207,8 @@ it("preserves total service headcount when search filters visible items", () => 
   assert.strictEqual(serviceHeadcount.noShow, 1);
 });
 
-// 4. Service Grouping & Default Selection Tests
-console.log("\n4. Service grouping & default selection");
+// 5. Service Grouping & Default Selection Tests
+console.log("\n5. Service grouping & default selection");
 
 function selectDefaultService(
   services: { id: string; serviceDate: Date; cutoffAt: Date }[],
@@ -258,8 +263,93 @@ it("handles empty services list gracefully", () => {
   assert.strictEqual(defaultId, "");
 });
 
-// 5. Bulk Reconciliation Simulation & Invariants
-console.log("\n5. Bulk Reconciliation Simulation & State Invariants");
+// 6. Individual Mark Served & No-Show with Service Date Restriction
+console.log("\n6. Individual Mark Served & No-Show (Service Date Restriction)");
+
+function simulateIndividualAction(
+  booking: BookingRowData,
+  serviceDate: Date,
+  today: Date,
+  userRole: Role | null,
+  action: "SERVED" | "NO_SHOW"
+): { ok: boolean; error?: string; updatedStatus?: BookingStatus } {
+  if (!userRole || userRole !== Role.KITCHEN) {
+    return { ok: false, error: "Unauthorized" };
+  }
+  if (booking.status !== BookingStatus.BOOKED) {
+    return { ok: false, error: "Cannot mark: booking not found or already finalized" };
+  }
+  if (serviceDate.getTime() > today.getTime()) {
+    return { ok: false, error: "Cannot mark: service is in the future" };
+  }
+  return {
+    ok: true,
+    updatedStatus: action === "SERVED" ? BookingStatus.SERVED : BookingStatus.NO_SHOW,
+  };
+}
+
+it("allows marking served for today's service", () => {
+  const today = new Date(Date.UTC(2026, 10, 16));
+  const res = simulateIndividualAction(mockBookings[0], today, today, Role.KITCHEN, "SERVED");
+  assert.strictEqual(res.ok, true);
+  assert.strictEqual(res.updatedStatus, BookingStatus.SERVED);
+});
+
+it("allows marking served for past service", () => {
+  const today = new Date(Date.UTC(2026, 10, 16));
+  const yesterday = new Date(Date.UTC(2026, 10, 15));
+  const res = simulateIndividualAction(mockBookings[0], yesterday, today, Role.KITCHEN, "SERVED");
+  assert.strictEqual(res.ok, true);
+  assert.strictEqual(res.updatedStatus, BookingStatus.SERVED);
+});
+
+it("rejects marking served for future service (tomorrow)", () => {
+  const today = new Date(Date.UTC(2026, 10, 16));
+  const tomorrow = new Date(Date.UTC(2026, 10, 17));
+  const res = simulateIndividualAction(mockBookings[0], tomorrow, today, Role.KITCHEN, "SERVED");
+  assert.strictEqual(res.ok, false);
+  assert.strictEqual(res.error, "Cannot mark: service is in the future");
+});
+
+it("allows marking individual no-show for today or past service", () => {
+  const today = new Date(Date.UTC(2026, 10, 16));
+  const res = simulateIndividualAction(mockBookings[0], today, today, Role.KITCHEN, "NO_SHOW");
+  assert.strictEqual(res.ok, true);
+  assert.strictEqual(res.updatedStatus, BookingStatus.NO_SHOW);
+});
+
+it("rejects individual no-show for future service", () => {
+  const today = new Date(Date.UTC(2026, 10, 16));
+  const tomorrow = new Date(Date.UTC(2026, 10, 17));
+  const res = simulateIndividualAction(mockBookings[0], tomorrow, today, Role.KITCHEN, "NO_SHOW");
+  assert.strictEqual(res.ok, false);
+});
+
+it("prevents overwriting already served or cancelled bookings individually", () => {
+  const today = new Date(Date.UTC(2026, 10, 16));
+  const servedBooking = mockBookings[1]; // SERVED
+  const cancelledBooking = mockBookings[4]; // CANCELLED
+
+  const resServed = simulateIndividualAction(servedBooking, today, today, Role.KITCHEN, "SERVED");
+  assert.strictEqual(resServed.ok, false);
+
+  const resCancelled = simulateIndividualAction(cancelledBooking, today, today, Role.KITCHEN, "NO_SHOW");
+  assert.strictEqual(resCancelled.ok, false);
+});
+
+it("rejects unauthenticated or student users from individual attendance actions", () => {
+  const today = new Date(Date.UTC(2026, 10, 16));
+  const resStudent = simulateIndividualAction(mockBookings[0], today, today, Role.STUDENT, "SERVED");
+  assert.strictEqual(resStudent.ok, false);
+  assert.strictEqual(resStudent.error, "Unauthorized");
+
+  const resAnon = simulateIndividualAction(mockBookings[0], today, today, null, "NO_SHOW");
+  assert.strictEqual(resAnon.ok, false);
+  assert.strictEqual(resAnon.error, "Unauthorized");
+});
+
+// 7. Bulk Reconciliation Simulation & State Invariants
+console.log("\n7. Bulk Reconciliation Simulation & State Invariants");
 
 function simulateReconciliation(
   bookings: BookingRowData[],
@@ -267,24 +357,20 @@ function simulateReconciliation(
   now: Date,
   userRole: Role | null
 ): { ok: boolean; count?: number; error?: string; updatedBookings: BookingRowData[] } {
-  // Authorization check
   if (!userRole || userRole !== Role.KITCHEN) {
     return { ok: false, error: "Unauthorized", updatedBookings: bookings };
   }
 
-  // Cutoff validation
   if (now < cutoffAt) {
     return { ok: false, error: "Service cutoff has not passed yet", updatedBookings: bookings };
   }
 
   let count = 0;
   const updatedBookings = bookings.map((b) => {
-    // Conditional transition: only BOOKED records become NO_SHOW
     if (b.status === BookingStatus.BOOKED) {
       count++;
       return { ...b, status: BookingStatus.NO_SHOW };
     }
-    // SERVED, CANCELLED, and existing NO_SHOW remain completely unchanged
     return b;
   });
 
@@ -297,17 +383,13 @@ it("reconciles only BOOKED records to NO_SHOW after cutoff", () => {
 
   const res = simulateReconciliation(mockBookings, pastCutoff, now, Role.KITCHEN);
   assert.strictEqual(res.ok, true);
-  assert.strictEqual(res.count, 2); // 2 BOOKED entries in mockBookings
+  assert.strictEqual(res.count, 2);
 
-  // Verify resulting statuses
   const reconciled = res.updatedBookings;
   assert.strictEqual(reconciled.find((b) => b.id === "booking_100001")?.status, BookingStatus.NO_SHOW);
   assert.strictEqual(reconciled.find((b) => b.id === "booking_100003")?.status, BookingStatus.NO_SHOW);
-  // SERVED remained SERVED
   assert.strictEqual(reconciled.find((b) => b.id === "booking_100002")?.status, BookingStatus.SERVED);
-  // CANCELLED remained CANCELLED
   assert.strictEqual(reconciled.find((b) => b.id === "booking_100005")?.status, BookingStatus.CANCELLED);
-  // existing NO_SHOW remained NO_SHOW
   assert.strictEqual(reconciled.find((b) => b.id === "booking_100004")?.status, BookingStatus.NO_SHOW);
 });
 
@@ -318,7 +400,6 @@ it("rejects reconciliation before cutoff time", () => {
   const res = simulateReconciliation(mockBookings, futureCutoff, now, Role.KITCHEN);
   assert.strictEqual(res.ok, false);
   assert.strictEqual(res.error, "Service cutoff has not passed yet");
-  // Client state unchanged
   assert.deepStrictEqual(res.updatedBookings, mockBookings);
 });
 
@@ -360,11 +441,10 @@ it("updates headcount immediately after reconciliation while keeping Expected To
   const res = simulateReconciliation(mockBookings, pastCutoff, now, Role.KITCHEN);
   const afterMetrics = computeHeadcount(res.updatedBookings);
 
-  // Expected must stay exactly 4!
   assert.strictEqual(afterMetrics.expected, 4);
   assert.strictEqual(afterMetrics.served, 1);
-  assert.strictEqual(afterMetrics.remaining, 0); // All remaining transitioned
-  assert.strictEqual(afterMetrics.noShow, 3); // 1 previous + 2 new
+  assert.strictEqual(afterMetrics.remaining, 0);
+  assert.strictEqual(afterMetrics.noShow, 3);
 });
 
 it("preserves search functionality on reconciled bookings", () => {
@@ -376,6 +456,30 @@ it("preserves search functionality on reconciled bookings", () => {
 
   assert.strictEqual(results.length, 1);
   assert.strictEqual(results[0].status, BookingStatus.NO_SHOW);
+});
+
+// 8. Error Sanitization Tests
+console.log("\n8. Error Sanitization");
+
+function handleServerError(err: unknown, defaultMessage: string): string {
+  if (err instanceof AttendanceError) {
+    return err.message;
+  }
+  return defaultMessage;
+}
+
+it("exposes intentional AttendanceError messages directly", () => {
+  const appErr = new AttendanceError("Cannot mark served: booking not found, already finalized, or service is in the future");
+  const msg = handleServerError(appErr, "Failed to mark booking served. Please try again.");
+  assert.strictEqual(msg, "Cannot mark served: booking not found, already finalized, or service is in the future");
+});
+
+it("sanitizes Prisma or database exceptions to generic safe message", () => {
+  const dbErr = new Error("Invalid `prisma.booking.updateMany()` invocation: SELECT clock_timestamp() failed. Table Booking does not exist.");
+  const msg = handleServerError(dbErr, "Failed to mark booking served. Please try again.");
+  assert.strictEqual(msg, "Failed to mark booking served. Please try again.");
+  assert.strictEqual(msg.includes("SELECT"), false);
+  assert.strictEqual(msg.includes("prisma"), false);
 });
 
 console.log(`\nResults: ${passedTests}/${totalTests} tests passed.`);
