@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { BookingStatus, Meal, Role } from "@prisma/client";
 import {
   calculatePrepReport,
-  classifyCancellation,
   getPrepAccess,
   getUnbookedStockLabel,
   getTodayServiceDate,
@@ -31,16 +30,8 @@ const service: PrepService = {
         { count: 2, status: BookingStatus.BOOKED },
         { count: 3, status: BookingStatus.SERVED },
         { count: 1, status: BookingStatus.NO_SHOW },
-        {
-          count: 2,
-          status: BookingStatus.CANCELLED,
-          cancellationAt: new Date(cutoffAt.getTime() - 1),
-        },
-        {
-          count: 4,
-          status: BookingStatus.CANCELLED,
-          cancellationAt: cutoffAt,
-        },
+        { count: 2, status: BookingStatus.CANCELLED },
+        { count: 4, status: BookingStatus.CANCELLED },
       ],
     },
     {
@@ -66,19 +57,20 @@ assert.equal(extra.bookedCount, 2, "sums active BOOKED plates");
 assert.equal(extra.servedCount, 3, "sums SERVED plates");
 assert.equal(extra.noShowCount, 1, "sums NO_SHOW plates");
 assert.equal(
-  extra.preCutoffCancelledCount,
-  2,
-  "classifies and reports before-cutoff cancellations as restocked",
+  extra.totalCancelledCount,
+  6,
+  "sums all cancelled plates",
 );
-assert.equal(extra.postCutoffCancelledCount, 4, "cutoff-equal cancellation is post-cutoff");
-assert.equal(extra.finalCookCount, 10, "counts all plates committed to cooking");
+assert.equal(extra.cancelledAfterCutoffCount, 2, "derives post-cutoff cancellations from stock");
+assert.equal(extra.restockedCount, 4, "derives pre-cutoff cancellations from stock");
+assert.equal(extra.finalCookCount, 8, "uses quantityTotal minus quantityLeft");
 assert.equal(extra.unbookedCount, 12, "uses quantityLeft as unbooked stock");
-assert.equal(extra.expectedRevenue, 900, "calculates revenue for extra dishes");
+assert.equal(extra.expectedRevenue, 720, "calculates revenue from the corrected cook count");
 assert.ok(included);
 assert.equal(included.expectedRevenue, null, "included dishes have no extra revenue");
-assert.equal(report.totalPlatesCooked, 13);
+assert.equal(report.totalPlatesCooked, 11);
 assert.equal(report.totalPlatesServed, 6);
-assert.equal(report.totalPlatesWasted, 5);
+assert.equal(report.totalPlatesWasted, 3);
 assert.equal(report.wastageRatePercent, 0, "pending reconciliation has no definitive rate");
 assert.equal(report.isCutoffPassed, false, "cutoff phase is active before cutoff");
 assert.equal(report.reconciliationStatus, "PENDING", "active bookings keep reconciliation pending");
@@ -96,17 +88,6 @@ assert.equal(emptyReport.totalPlatesCooked, 0);
 assert.equal(emptyReport.wastageRatePercent, 0, "zero cooked plates avoid division errors");
 assert.equal(emptyReport.reconciliationStatus, "PENDING");
 
-assert.equal(
-  classifyCancellation(cutoffAt, undefined),
-  "UNKNOWN",
-  "missing cancellation timestamp is never silently classified",
-);
-assert.equal(
-  classifyCancellation(cutoffAt, new Date(cutoffAt.getTime() - 1)),
-  "PRE_CUTOFF",
-);
-assert.equal(classifyCancellation(cutoffAt, cutoffAt), "POST_CUTOFF");
-
 const completedToday = calculatePrepReport(
   {
     ...service,
@@ -114,6 +95,7 @@ const completedToday = calculatePrepReport(
     offerings: [
       {
         ...service.offerings[0],
+        quantityLeft: 16,
         bookings: [
           { count: 3, status: BookingStatus.SERVED },
           { count: 1, status: BookingStatus.NO_SHOW },
@@ -155,28 +137,95 @@ assert.equal(
 assert.equal(incompleteToday.unresolvedBookedCount, 1);
 assert.equal(incompleteToday.totalPlatesWasted, 0);
 
-const uncertainCancellation = calculatePrepReport(
+const noCancellations = calculatePrepReport(
   {
     ...service,
     offerings: [
       {
         ...service.offerings[0],
         bookings: [
-          { count: 2, status: BookingStatus.CANCELLED },
+          { count: 4, status: BookingStatus.SERVED },
         ],
       },
     ],
   },
+  cutoffAt,
+);
+assert.equal(
+  noCancellations.offerings[0].restockedCount,
+  0,
+  "no cancellations do not produce restocked plates",
+);
+assert.equal(noCancellations.offerings[0].cancelledAfterCutoffCount, 0);
+
+const allPreCutoff = calculatePrepReport(
+  {
+    ...service,
+    offerings: [
+      {
+        ...service.offerings[0],
+        quantityLeft: 20,
+        bookings: [{ count: 20, status: BookingStatus.CANCELLED }],
+      },
+    ],
+  },
+  now,
+).offerings[0];
+assert.equal(allPreCutoff.finalCookCount, 0);
+assert.equal(allPreCutoff.restockedCount, 20);
+assert.equal(allPreCutoff.cancelledAfterCutoffCount, 0);
+
+const allPostCutoff = calculatePrepReport(
+  {
+    ...service,
+    offerings: [
+      {
+        ...service.offerings[0],
+        quantityLeft: 0,
+        bookings: [{ count: 20, status: BookingStatus.CANCELLED }],
+      },
+    ],
+  },
+  cutoffAt,
+).offerings[0];
+assert.equal(allPostCutoff.finalCookCount, 20);
+assert.equal(allPostCutoff.restockedCount, 0);
+assert.equal(allPostCutoff.cancelledAfterCutoffCount, 20);
+
+const invalidQuantities = calculatePrepReport(
+  {
+    ...service,
+    offerings: [
+      {
+        ...service.offerings[0],
+        quantityTotal: -5,
+        quantityLeft: -2,
+        bookings: [
+          { count: -3, status: BookingStatus.BOOKED },
+          { count: 2.5, status: BookingStatus.CANCELLED },
+        ],
+      },
+    ],
+  },
+  cutoffAt,
+).offerings[0];
+assert.equal(invalidQuantities.quantityTotal, 0);
+assert.equal(invalidQuantities.quantityLeft, 0);
+assert.equal(invalidQuantities.finalCookCount, 0);
+assert.equal(invalidQuantities.totalCancelledCount, 0);
+assert.equal(invalidQuantities.expectedRevenue, 0);
+
+const missingBookings = calculatePrepReport(
+  {
+    ...service,
+    offerings: [
+      { ...service.offerings[0], quantityLeft: 20, bookings: [] },
+    ],
+  },
   new Date(cutoffAt.getTime() + 1),
 );
-assert.equal(uncertainCancellation.uncertainCancelledCount, 2);
-assert.equal(
-  uncertainCancellation.offerings[0].finalCookCount,
-  2,
-  "uncertain cancellations are conservatively cooked but not classified",
-);
-assert.equal(uncertainCancellation.reconciliationStatus, "PENDING");
-assert.equal(uncertainCancellation.totalPlatesWasted, 0);
+assert.equal(missingBookings.totalPlatesCooked, 0);
+assert.equal(missingBookings.reconciliationStatus, "PENDING");
 
 assert.equal(getUnbookedStockLabel(false), "Provisional Unbooked Stock");
 assert.equal(getUnbookedStockLabel(true), "Locked Unbooked Stock");

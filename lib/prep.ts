@@ -4,11 +4,6 @@ import type { CurrentUser } from "@/lib/auth";
 export type PrepBooking = {
   count: number;
   status: BookingStatus;
-  /**
-   * Optional trusted cancellation timestamp. The current Booking model does
-   * not persist one, so application-loaded cancelled rows leave this unset.
-   */
-  cancellationAt?: Date | null;
 };
 
 export type PrepOffering = {
@@ -41,9 +36,9 @@ export type OfferingPrepSummary = {
   bookedCount: number;
   servedCount: number;
   noShowCount: number;
-  postCutoffCancelledCount: number;
-  preCutoffCancelledCount: number;
-  uncertainCancelledCount: number;
+  totalCancelledCount: number;
+  cancelledAfterCutoffCount: number;
+  restockedCount: number;
   finalCookCount: number;
   unbookedCount: number;
   expectedRevenue: number | null;
@@ -63,7 +58,6 @@ export type ServicePrepReport = {
   totalPlatesWasted: number;
   wastageRatePercent: number;
   unresolvedBookedCount: number;
-  uncertainCancelledCount: number;
   reconciliationStatus: ReconciliationStatus;
 };
 
@@ -81,18 +75,6 @@ export function getTodayServiceDate(now: Date): Date {
   return new Date(
     Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()),
   );
-}
-
-export type CancellationTiming = "PRE_CUTOFF" | "POST_CUTOFF" | "UNKNOWN";
-
-export function classifyCancellation(
-  cutoffAt: Date,
-  cancellationAt: Date | null | undefined,
-): CancellationTiming {
-  if (!cancellationAt) return "UNKNOWN";
-  return cancellationAt.getTime() < cutoffAt.getTime()
-    ? "PRE_CUTOFF"
-    : "POST_CUTOFF";
 }
 
 export function resolvePrepService<T extends Pick<
@@ -136,67 +118,66 @@ export function calculatePrepReport(
   now: Date,
 ): ServicePrepReport {
   const offerings = service.offerings.map((offering) => {
+    const quantityTotal = validQuantity(offering.quantityTotal);
+    const quantityLeft = Math.min(
+      quantityTotal,
+      validQuantity(offering.quantityLeft),
+    );
     let bookedCount = 0;
     let servedCount = 0;
     let noShowCount = 0;
-    let postCutoffCancelledCount = 0;
-    let preCutoffCancelledCount = 0;
-    let uncertainCancelledCount = 0;
+    let totalCancelledCount = 0;
 
     for (const booking of offering.bookings) {
+      const count = validQuantity(booking.count);
       switch (booking.status) {
         case BookingStatus.BOOKED:
-          bookedCount += booking.count;
+          bookedCount += count;
           break;
         case BookingStatus.SERVED:
-          servedCount += booking.count;
+          servedCount += count;
           break;
         case BookingStatus.NO_SHOW:
-          noShowCount += booking.count;
+          noShowCount += count;
           break;
         case BookingStatus.CANCELLED:
-          switch (classifyCancellation(service.cutoffAt, booking.cancellationAt)) {
-            case "PRE_CUTOFF":
-              preCutoffCancelledCount += booking.count;
-              break;
-            case "POST_CUTOFF":
-              postCutoffCancelledCount += booking.count;
-              break;
-            case "UNKNOWN":
-              uncertainCancelledCount += booking.count;
-              break;
-          }
+          totalCancelledCount += count;
           break;
       }
     }
 
-    const finalCookCount =
-      bookedCount +
-      servedCount +
-      noShowCount +
-      postCutoffCancelledCount;
+    const finalCookCount = Math.max(
+      0,
+      Math.min(quantityTotal, quantityTotal - quantityLeft),
+    );
+    const cancelledAfterCutoffCount = Math.min(
+      totalCancelledCount,
+      Math.max(0, finalCookCount - (bookedCount + servedCount + noShowCount)),
+    );
+    const restockedCount = Math.max(
+      0,
+      totalCancelledCount - cancelledAfterCutoffCount,
+    );
 
     return {
       offeringId: offering.id,
       menuItemName: offering.menuItem.name,
       included: offering.menuItem.included,
       priceRupees: offering.menuItem.priceRupees,
-      quantityTotal: offering.quantityTotal,
-      quantityLeft: offering.quantityLeft,
+      quantityTotal,
+      quantityLeft,
       bookedCount,
       servedCount,
       noShowCount,
-      postCutoffCancelledCount,
-      preCutoffCancelledCount,
-      uncertainCancelledCount,
-      finalCookCount:
-        finalCookCount + uncertainCancelledCount,
-      unbookedCount: offering.quantityLeft,
+      totalCancelledCount,
+      cancelledAfterCutoffCount,
+      restockedCount,
+      finalCookCount,
+      unbookedCount: quantityLeft,
       expectedRevenue:
         offering.menuItem.included || offering.menuItem.priceRupees === null
           ? null
-          : (finalCookCount + uncertainCancelledCount) *
-            offering.menuItem.priceRupees,
+          : finalCookCount * offering.menuItem.priceRupees,
     };
   });
 
@@ -210,20 +191,20 @@ export function calculatePrepReport(
   );
   const totalPlatesWasted = offerings.reduce(
     (total, offering) =>
-      total + offering.noShowCount + offering.postCutoffCancelledCount,
+      total + offering.noShowCount + offering.cancelledAfterCutoffCount,
     0,
   );
   const unresolvedBookedCount = offerings.reduce(
     (total, offering) => total + offering.bookedCount,
     0,
   );
-  const uncertainCancelledCount = offerings.reduce(
-    (total, offering) => total + offering.uncertainCancelledCount,
-    0,
-  );
   const totalBookingCount = service.offerings.reduce(
     (total, offering) =>
-      total + offering.bookings.reduce((count, booking) => count + booking.count, 0),
+      total +
+      offering.bookings.reduce(
+        (count, booking) => count + validQuantity(booking.count),
+        0,
+      ),
     0,
   );
   const isServiceDateBeforeToday =
@@ -234,7 +215,6 @@ export function calculatePrepReport(
     totalBookingCount > 0;
   const reconciliationStatus: ReconciliationStatus =
     unresolvedBookedCount === 0 &&
-    uncertainCancelledCount === 0 &&
     totalBookingCount > 0 &&
     (isServiceDateBeforeToday || isTodayWithTerminalBookings)
       ? "COMPLETED"
@@ -255,9 +235,12 @@ export function calculatePrepReport(
         ? 0
         : (totalPlatesWasted / totalPlatesCooked) * 100,
     unresolvedBookedCount,
-    uncertainCancelledCount,
     reconciliationStatus,
   };
+}
+
+function validQuantity(value: number): number {
+  return Number.isSafeInteger(value) && value > 0 ? value : 0;
 }
 
 export function isPastServiceDate(serviceDate: Date, now: Date): boolean {

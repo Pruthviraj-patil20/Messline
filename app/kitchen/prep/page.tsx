@@ -106,7 +106,7 @@ export default async function KitchenPrepPage({
     0;
   const totalRestocked =
     report?.offerings.reduce(
-      (total, offering) => total + offering.preCutoffCancelledCount,
+      (total, offering) => total + offering.restockedCount,
       0,
     ) ?? 0;
   const totalUnbooked = report?.offerings.reduce(
@@ -299,7 +299,7 @@ export default async function KitchenPrepPage({
                           {offering.bookedCount}
                         </td>
                         <td className="p-3 text-lg tabular-nums">
-                          {offering.preCutoffCancelledCount}
+                          {offering.restockedCount}
                         </td>
                         <td className="p-3 text-lg tabular-nums">
                           {offering.unbookedCount}
@@ -345,24 +345,15 @@ export default async function KitchenPrepPage({
                   <p className="mt-1">
                     {report.unresolvedBookedCount > 0
                       ? `${report.unresolvedBookedCount} booked plate(s) still need to be marked served or no-show.`
-                      : report.uncertainCancelledCount > 0
-                        ? `${report.uncertainCancelledCount} cancelled plate(s) have no reliable cancellation timestamp and cannot be classified.`
-                        : isHistorical
-                          ? "Completion cannot be confirmed yet."
-                          : "Today’s meal is not confirmed complete yet."}
+                      : isHistorical
+                        ? "Completion cannot be confirmed yet."
+                        : "Today’s meal is not confirmed complete yet."}
                   </p>
-                  {report.uncertainCancelledCount > 0 ? (
-                    <p className="mt-1">
-                      They are included conservatively in Final Cook Count, but
-                      excluded from definitive wastage totals.
-                    </p>
-                  ) : null}
                 </div>
               ) : null}
               {report.reconciliationStatus === "COMPLETED" ? (
                 <p className="mt-1 text-sm text-neutral-600">
-                  Reconciliation complete: all bookings have a terminal status
-                  and all cancellations have known timing.
+                  Reconciliation complete: all bookings have a terminal status.
                 </p>
               ) : null}
               {report.reconciliationStatus === "COMPLETED" ? (
