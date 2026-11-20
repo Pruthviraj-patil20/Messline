@@ -19,9 +19,7 @@ function today() {
   return new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
 }
 
-function mealLabel(meal: string) {
-  return meal.charAt(0).toUpperCase() + meal.slice(1).toLowerCase();
-}
+import { mealLabel } from "@/lib/format";
 
 function dateLabel(d: Date) {
   return d.toLocaleDateString("en-IN", {

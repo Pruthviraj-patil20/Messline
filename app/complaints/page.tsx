@@ -27,9 +27,7 @@ function dayLabel(d: Date) {
   });
 }
 
-function mealLabel(meal: string) {
-  return meal.charAt(0).toUpperCase() + meal.slice(1).toLowerCase();
-}
+import { mealLabel } from "@/lib/format";
 
 function statusLabel(status: string) {
   return status.charAt(0).toUpperCase() + status.slice(1).toLowerCase();

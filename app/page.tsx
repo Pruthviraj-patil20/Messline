@@ -29,9 +29,7 @@ function dayLabel(d: Date) {
   });
 }
 
-function mealLabel(meal: string) {
-  return meal.charAt(0).toUpperCase() + meal.slice(1).toLowerCase();
-}
+import { mealLabel } from "@/lib/format";
 
 function priceLabel(included: boolean, priceRupees: number | null) {
   if (included) return "included";

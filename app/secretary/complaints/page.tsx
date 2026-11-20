@@ -30,9 +30,7 @@ async function acknowledge(formData: FormData) {
   revalidatePath("/secretary/complaints");
 }
 
-function mealLabel(meal: string) {
-  return meal.charAt(0).toUpperCase() + meal.slice(1).toLowerCase();
-}
+import { mealLabel } from "@/lib/format";
 
 function dateLabel(d: Date) {
   return d.toLocaleDateString("en-IN", {

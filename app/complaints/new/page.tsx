@@ -29,9 +29,7 @@ function dayLabel(d: Date) {
   });
 }
 
-function mealLabel(meal: string) {
-  return meal.charAt(0).toUpperCase() + meal.slice(1).toLowerCase();
-}
+import { mealLabel } from "@/lib/format";
 
 const complaintSchema = z.object({
   offeringId: z.string().min(1, "Please select an offering."),

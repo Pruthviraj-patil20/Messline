@@ -49,9 +49,7 @@ function dayLabel(d: Date) {
   });
 }
 
-function mealLabel(meal: string) {
-  return meal.charAt(0).toUpperCase() + meal.slice(1).toLowerCase();
-}
+import { mealLabel } from "@/lib/format";
 
 function formatCutoff(d: Date) {
   return d.toLocaleString("en-IN", {
