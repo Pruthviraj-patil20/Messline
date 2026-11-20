@@ -133,7 +133,15 @@ export default async function BookingsPage({
       )}
 
       {bookings.length === 0 ? (
-        <p className="mt-6 text-sm">No bookings yet.</p>
+        <div className="mt-6 rounded-lg border border-dashed border-neutral-300 p-8 text-center text-sm text-neutral-500">
+          No bookings yet.
+          <a
+            href="/"
+            className="mt-3 inline-block underline text-neutral-900"
+          >
+            Book a meal
+          </a>
+        </div>
       ) : (
         <div className="mt-6 overflow-x-auto">
           <table className="block w-full border-collapse text-left text-sm sm:table">
