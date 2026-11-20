@@ -32,12 +32,6 @@ function dayLabel(d: Date) {
 }
 
 
-const statusLabels: Record<string, string> = {
-
-function mealLabel(meal: string) {
-  return meal.charAt(0).toUpperCase() + meal.slice(1).toLowerCase();
-}
-
 const statusLabels: Record<BookingStatus, string> = {
 
   BOOKED: "Booked",

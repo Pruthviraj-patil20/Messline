@@ -1,10 +1,8 @@
 import Link from "next/link";
 import { prisma } from "@/lib/db";
 
-import { clearSession, getCurrentUser } from "@/lib/auth";
-import { mealLabel } from "@/lib/format";
-
 import { getCurrentUser } from "@/lib/auth";
+import { mealLabel } from "@/lib/format";
 
 import { bookPlatesAction } from "./actions";
 
@@ -28,10 +26,6 @@ function dayLabel(d: Date) {
   });
 }
 
-
-function mealLabel(meal: string) {
-  return meal.charAt(0).toUpperCase() + meal.slice(1).toLowerCase();
-}
 
 function formatCutoff(d: Date) {
   return d.toLocaleString("en-IN", {
