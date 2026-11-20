@@ -139,8 +139,12 @@ export default async function KitchenBookingsPage() {
                       type="submit"
                       name="status"
                       value={BookingStatus.SERVED}
+
                       className="rounded bg-neutral-900 px-3 py-1.5 text-white"
                       aria-label={`Mark ${row.user.name} served`}
+
+                      className="rounded bg-emerald-600 px-3 py-1.5 text-sm text-white hover:bg-emerald-700"
+
                     >
                       Served
                     </button>
@@ -148,8 +152,12 @@ export default async function KitchenBookingsPage() {
                       type="submit"
                       name="status"
                       value={BookingStatus.NO_SHOW}
+
                       className="rounded border border-neutral-300 px-3 py-1.5 hover:bg-neutral-100"
                       aria-label={`Mark ${row.user.name} no-show`}
+
+                      className="rounded border border-red-200 px-3 py-1.5 text-sm text-red-700 hover:bg-red-50"
+
                     >
                       No-show
                     </button>
@@ -161,7 +169,10 @@ export default async function KitchenBookingsPage() {
         ))
       )}
 
-      <p className="mt-8 text-sm">
+      <p className="mt-8 flex items-center gap-4 text-sm">
+        <Link href="/kitchen" className="underline">
+          Kitchen
+        </Link>
         <Link href="/" className="underline">
           Back to home
         </Link>
