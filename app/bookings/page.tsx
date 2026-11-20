@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { BookingStatus } from "@prisma/client";
 import { getCurrentUser } from "@/lib/auth";
 import { cancelBooking, CancelBookingError } from "@/lib/booking";
+import { getBookingToken } from "@/lib/attendance";
 import { prisma } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
@@ -189,7 +190,7 @@ export default async function BookingsPage({
                       <span className="mr-2 text-xs text-neutral-500 sm:hidden">
                         Dish
                       </span>
-                      {booking.offering.menuItem.name}
+                      {booking.offering.menuItem.name} <span className="ml-2 text-xs text-neutral-500">Pass: #{getBookingToken(booking.id)}</span>
                     </td>
                     <td className="block py-0.5 sm:table-cell sm:py-2 sm:pr-3">
                       <span className="mr-2 text-xs text-neutral-500 sm:hidden">

@@ -1,11 +1,15 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { BookingStatus, Role } from "@prisma/client";
-import { z } from "zod";
+import { BookingStatus, Meal, Role } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
+import { getBookingToken } from "@/lib/attendance";
+import {
+  KitchenCounterVerification,
+  ServiceGroupData,
+  BookingRowData,
+} from "./counter-verification";
 
 export const metadata: Metadata = {
   title: "Bookings | Messline",
@@ -14,9 +18,11 @@ export const metadata: Metadata = {
 export const dynamic = "force-dynamic";
 
 // serviceDate is stored as midnight UTC of the local day (same as calendarDate in app/page.tsx)
-function today() {
+function calendarDate(offsetDays: number) {
   const now = new Date();
-  return new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+  return new Date(
+    Date.UTC(now.getFullYear(), now.getMonth(), now.getDate() + offsetDays)
+  );
 }
 
 function mealLabel(meal: string) {
@@ -24,6 +30,15 @@ function mealLabel(meal: string) {
 }
 
 function dateLabel(d: Date) {
+  const today = calendarDate(0).getTime();
+  const yesterday = calendarDate(-1).getTime();
+  const tomorrow = calendarDate(1).getTime();
+  const time = d.getTime();
+
+  if (time === today) return "Today";
+  if (time === yesterday) return "Yesterday";
+  if (time === tomorrow) return "Tomorrow";
+
   return d.toLocaleDateString("en-IN", {
     day: "numeric",
     month: "short",
@@ -31,142 +46,164 @@ function dateLabel(d: Date) {
   });
 }
 
-const markSchema = z.object({
-  bookingId: z.string().min(1),
-  status: z.enum(["SERVED", "NO_SHOW"]),
-});
-
-async function markBooking(formData: FormData) {
-  "use server";
-
-  // Checked again here: a server action can be called without opening the page.
-  const user = await getCurrentUser();
-  if (!user) redirect("/login");
-  if (user.role !== Role.KITCHEN) redirect("/");
-
-  const parsed = markSchema.safeParse({
-    bookingId: formData.get("bookingId"),
-    status: formData.get("status"),
-  });
-  if (!parsed.success) return;
-
-  // The BOOKED check is in the WHERE clause, so a double click or a second
-  // tab cannot change a booking that already has a final status. quantityLeft
-  // is not touched: SERVED and NO_SHOW never move stock (docs/rules.md, Cancel).
-  await prisma.booking.updateMany({
-    where: {
-      id: parsed.data.bookingId,
-      status: BookingStatus.BOOKED,
-      offering: { service: { serviceDate: { lte: today() } } },
-    },
-    data: { status: parsed.data.status },
-  });
-
-  revalidatePath("/kitchen/bookings");
-}
-
 export default async function KitchenBookingsPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
   if (user.role !== Role.KITCHEN) redirect("/");
 
-  const bookings = await prisma.booking.findMany({
+  const minRecentDate = calendarDate(-7);
+  const maxUpcomingDate = calendarDate(1);
+
+  // Fetch all services that either:
+  // 1. Fall within the primary window: past 7 days up to tomorrow (upcoming 1 day).
+  // 2. OR are older past services that still contain outstanding BOOKED bookings
+  //    (ensures historical unmarked bookings are never dropped).
+  const services = await prisma.service.findMany({
     where: {
-      status: BookingStatus.BOOKED,
-      offering: { service: { serviceDate: { lte: today() } } },
+      OR: [
+        {
+          serviceDate: {
+            gte: minRecentDate,
+            lte: maxUpcomingDate,
+          },
+        },
+        {
+          serviceDate: {
+            lt: minRecentDate,
+          },
+          offerings: {
+            some: {
+              bookings: {
+                some: {
+                  status: BookingStatus.BOOKED,
+                },
+              },
+            },
+          },
+        },
+      ],
     },
-    select: {
-      id: true,
-      count: true,
-      user: { select: { name: true } },
-      offering: {
-        select: {
+    include: {
+      offerings: {
+        include: {
           menuItem: { select: { name: true } },
-          service: {
-            select: { id: true, meal: true, serviceDate: true },
+          bookings: {
+            where: {
+              status: { not: BookingStatus.CANCELLED },
+            },
+            include: {
+              user: { select: { name: true, email: true } },
+            },
+            orderBy: { createdAt: "asc" },
           },
         },
       },
     },
-    orderBy: [
-      { offering: { service: { serviceDate: "asc" } } },
-      { offering: { service: { meal: "asc" } } },
-      { createdAt: "asc" },
-    ],
+    orderBy: [{ serviceDate: "desc" }, { meal: "desc" }],
   });
 
-  const groups = new Map<
-    string,
-    { meal: string; serviceDate: Date; rows: typeof bookings }
-  >();
-  for (const booking of bookings) {
-    const { id, meal, serviceDate } = booking.offering.service;
-    const group = groups.get(id) ?? { meal, serviceDate, rows: [] };
-    group.rows.push(booking);
-    groups.set(id, group);
+  const mealOrder: Record<Meal, number> = {
+    BREAKFAST: 1,
+    LUNCH: 2,
+    DINNER: 3,
+  };
+
+  // Sort services chronologically: date desc, meal desc
+  services.sort((a, b) => {
+    const dDiff = b.serviceDate.getTime() - a.serviceDate.getTime();
+    if (dDiff !== 0) return dDiff;
+    return (mealOrder[b.meal] ?? 0) - (mealOrder[a.meal] ?? 0);
+  });
+
+  const now = new Date();
+  const todayMidnight = calendarDate(0).getTime();
+
+  // Determine default service:
+  // 1. Look for today's service whose cutoffAt is in the future or closest to now
+  // 2. Otherwise today's first service
+  // 3. Otherwise the most recent service
+  let defaultServiceId = "";
+
+  const todayServices = services.filter(
+    (s) => s.serviceDate.getTime() === todayMidnight
+  );
+
+  if (todayServices.length > 0) {
+    const upcomingToday = todayServices.find((s) => s.cutoffAt >= now);
+    if (upcomingToday) {
+      defaultServiceId = upcomingToday.id;
+    } else {
+      defaultServiceId = todayServices[0].id;
+    }
+  } else if (services.length > 0) {
+    defaultServiceId = services[0].id;
   }
 
+  // Transform data for the client component
+  const serviceGroups: ServiceGroupData[] = services.map((service) => {
+    const isToday = service.serviceDate.getTime() === todayMidnight;
+    const tabLabel = `${dateLabel(service.serviceDate)}'s ${mealLabel(service.meal)}`;
+
+    const bookings: BookingRowData[] = [];
+    for (const offering of service.offerings) {
+      for (const b of offering.bookings) {
+        bookings.push({
+          id: b.id,
+          count: b.count,
+          status: b.status,
+          userName: b.user.name,
+          userEmail: b.user.email,
+          dishName: offering.menuItem.name,
+          token: getBookingToken(b.id),
+        });
+      }
+    }
+
+    // Sort bookings: BOOKED first (remaining in line), then SERVED, then NO_SHOW
+    const statusOrder: Record<BookingStatus, number> = {
+      BOOKED: 1,
+      SERVED: 2,
+      NO_SHOW: 3,
+      CANCELLED: 4,
+    };
+    bookings.sort((a, b) => (statusOrder[a.status] ?? 9) - (statusOrder[b.status] ?? 9));
+
+    return {
+      id: service.id,
+      meal: service.meal,
+      serviceDateStr: service.serviceDate.toISOString(),
+      tabLabel,
+      cutoffAtStr: service.cutoffAt.toISOString(),
+      isToday,
+      isCutoffPassed: now >= service.cutoffAt,
+      canMarkAttendance: service.serviceDate.getTime() <= todayMidnight,
+      bookings,
+    };
+  });
+
   return (
-    <main className="mx-auto max-w-3xl px-6 py-10">
-      <h1 className="text-2xl font-semibold">Bookings</h1>
-      <p className="mt-2 text-sm text-neutral-700">
-        Mark each booking served or no-show after the meal.
-      </p>
+    <main className="mx-auto max-w-4xl px-4 py-8 sm:px-6">
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold text-neutral-900">Bookings</h1>
+          <p className="mt-1 text-sm text-neutral-600">
+            Counter meal verification mode and attendance tracking.
+          </p>
+        </div>
+        <div className="flex items-center gap-4 text-sm">
+          <Link href="/kitchen" className="underline hover:text-neutral-900">
+            Kitchen
+          </Link>
+          <Link href="/" className="underline hover:text-neutral-900">
+            Home
+          </Link>
+        </div>
+      </div>
 
-      {groups.size === 0 ? (
-        <p className="mt-6 text-sm">Nothing to mark.</p>
-      ) : (
-        Array.from(groups.entries()).map(([serviceId, group]) => (
-          <section key={serviceId} className="mt-8">
-            <h2 className="text-lg font-medium">
-              {mealLabel(group.meal)}, {dateLabel(group.serviceDate)}
-            </h2>
-            <ul className="mt-2 divide-y divide-neutral-200 border-y border-neutral-200 text-sm">
-              {group.rows.map((row) => (
-                <li
-                  key={row.id}
-                  className="flex flex-wrap items-center justify-between gap-3 py-2"
-                >
-                  <div>
-                    <div>{row.user.name}</div>
-                    <div className="text-xs text-neutral-500">
-                      {row.offering.menuItem.name} &times; {row.count}
-                    </div>
-                  </div>
-                  <form action={markBooking} className="flex gap-2">
-                    <input type="hidden" name="bookingId" value={row.id} />
-                    <button
-                      type="submit"
-                      name="status"
-                      value={BookingStatus.SERVED}
-                      className="rounded bg-emerald-600 px-3 py-1.5 text-sm text-white hover:bg-emerald-700"
-                    >
-                      Served
-                    </button>
-                    <button
-                      type="submit"
-                      name="status"
-                      value={BookingStatus.NO_SHOW}
-                      className="rounded border border-red-200 px-3 py-1.5 text-sm text-red-700 hover:bg-red-50"
-                    >
-                      No-show
-                    </button>
-                  </form>
-                </li>
-              ))}
-            </ul>
-          </section>
-        ))
-      )}
-
-      <p className="mt-8 flex items-center gap-4 text-sm">
-        <Link href="/kitchen" className="underline">
-          Kitchen
-        </Link>
-        <Link href="/" className="underline">
-          Back to home
-        </Link>
-      </p>
+      <KitchenCounterVerification
+        services={serviceGroups}
+        defaultServiceId={defaultServiceId}
+      />
     </main>
   );
 }
