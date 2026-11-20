@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth";
 import { cancelBooking, CancelBookingError } from "@/lib/booking";
 import { prisma } from "@/lib/db";
+import { mealLabel } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 
@@ -29,9 +30,7 @@ function dayLabel(d: Date) {
   });
 }
 
-function mealLabel(meal: string) {
-  return meal.charAt(0).toUpperCase() + meal.slice(1).toLowerCase();
-}
+
 
 const statusLabels: Record<string, string> = {
   BOOKED: "Booked",

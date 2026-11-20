@@ -3,6 +3,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
+import { mealLabel } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 
@@ -27,9 +28,7 @@ function dayLabel(d: Date) {
   });
 }
 
-function mealLabel(meal: string) {
-  return meal.charAt(0).toUpperCase() + meal.slice(1).toLowerCase();
-}
+
 
 function statusLabel(status: string) {
   return status.charAt(0).toUpperCase() + status.slice(1).toLowerCase();

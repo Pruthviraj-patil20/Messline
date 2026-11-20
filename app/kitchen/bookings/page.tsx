@@ -6,6 +6,7 @@ import { BookingStatus, Role } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
+import { mealLabel } from "@/lib/format";
 
 export const metadata: Metadata = {
   title: "Bookings | Messline",
@@ -19,9 +20,7 @@ function today() {
   return new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
 }
 
-function mealLabel(meal: string) {
-  return meal.charAt(0).toUpperCase() + meal.slice(1).toLowerCase();
-}
+
 
 function dateLabel(d: Date) {
   return d.toLocaleDateString("en-IN", {

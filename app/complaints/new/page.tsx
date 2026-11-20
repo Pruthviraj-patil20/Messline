@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
+import { mealLabel } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 
@@ -29,9 +30,7 @@ function dayLabel(d: Date) {
   });
 }
 
-function mealLabel(meal: string) {
-  return meal.charAt(0).toUpperCase() + meal.slice(1).toLowerCase();
-}
+
 
 const complaintSchema = z.object({
   offeringId: z.string().min(1, "Please select an offering."),
