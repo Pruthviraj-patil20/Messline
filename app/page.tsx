@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { clearSession, getCurrentUser } from "@/lib/auth";
+import { mealLabel } from "@/lib/format";
 import { bookPlatesAction } from "./actions";
 
 export const dynamic = "force-dynamic";
@@ -27,10 +28,6 @@ function dayLabel(d: Date) {
     month: "short",
     timeZone: "UTC",
   });
-}
-
-function mealLabel(meal: string) {
-  return meal.charAt(0).toUpperCase() + meal.slice(1).toLowerCase();
 }
 
 function priceLabel(included: boolean, priceRupees: number | null) {

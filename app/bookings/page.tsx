@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth";
+import { mealLabel } from "@/lib/format";
 import { cancelBooking, CancelBookingError } from "@/lib/booking";
 import { prisma } from "@/lib/db";
 
@@ -27,10 +28,6 @@ function dayLabel(d: Date) {
     month: "short",
     timeZone: "UTC",
   });
-}
-
-function mealLabel(meal: string) {
-  return meal.charAt(0).toUpperCase() + meal.slice(1).toLowerCase();
 }
 
 const statusLabels: Record<string, string> = {

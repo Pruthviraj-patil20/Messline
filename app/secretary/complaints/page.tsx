@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
+import { mealLabel } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 
@@ -28,10 +29,6 @@ async function acknowledge(formData: FormData) {
   });
 
   revalidatePath("/secretary/complaints");
-}
-
-function mealLabel(meal: string) {
-  return meal.charAt(0).toUpperCase() + meal.slice(1).toLowerCase();
 }
 
 function dateLabel(d: Date) {

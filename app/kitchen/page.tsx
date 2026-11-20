@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { Meal, Role } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { getCurrentUser } from "@/lib/auth";
+import { mealLabel } from "@/lib/format";
 import {
   createService,
   parseCreateServiceFormData,
@@ -47,10 +48,6 @@ function dayLabel(d: Date) {
     year: "numeric",
     timeZone: "UTC",
   });
-}
-
-function mealLabel(meal: string) {
-  return meal.charAt(0).toUpperCase() + meal.slice(1).toLowerCase();
 }
 
 function formatCutoff(d: Date) {
