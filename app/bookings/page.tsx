@@ -215,7 +215,11 @@ export default async function BookingsPage({
                             name="bookingId"
                             value={booking.id}
                           />
-                          <button type="submit" className="underline">
+                          <button
+                            type="submit"
+                            className="underline"
+                            aria-label={`Cancel ${booking.offering.menuItem.name} booking`}
+                          >
                             Cancel
                           </button>
                           <span className="mt-1 block text-xs text-neutral-500 sm:ml-2 sm:mt-0 sm:inline">
