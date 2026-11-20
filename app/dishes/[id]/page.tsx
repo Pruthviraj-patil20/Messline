@@ -267,7 +267,7 @@ export default async function DishPage({
             type="submit"
             className="mt-4 rounded bg-neutral-900 px-4 py-2 text-sm text-white hover:bg-neutral-800"
           >
-            Submit rating
+            {existingReview ? "Update rating" : "Submit rating"}
           </button>
         </form>
       )}
