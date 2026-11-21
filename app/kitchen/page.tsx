@@ -172,6 +172,9 @@ export default async function KitchenPage({
           <Link href="/kitchen/bookings" className="text-sm underline">
             Bookings
           </Link>
+          <Link href="/kitchen/prep" className="text-sm underline">
+            Prep
+          </Link>
           <Link href="/" className="text-sm underline">
             Back to home
           </Link>
