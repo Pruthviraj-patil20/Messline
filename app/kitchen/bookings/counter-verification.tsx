@@ -469,6 +469,7 @@ export function KitchenCounterVerification({
                                 disabled={isPending}
                                 onClick={() => handleMarkServed(row.id)}
                                 className="rounded bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-600 focus:ring-offset-1 disabled:opacity-50"
+                                aria-label={`Mark ${row.userName} served`}
                               >
                                 {isServingThis ? "Serving..." : "Served"}
                               </button>
@@ -477,6 +478,7 @@ export function KitchenCounterVerification({
                                 disabled={isPending}
                                 onClick={() => handleMarkNoShow(row.id)}
                                 className="rounded border border-red-200 px-3 py-1.5 text-xs font-medium text-red-700 transition hover:bg-red-50 focus:outline-none focus:ring-2 focus:ring-red-400 focus:ring-offset-1 disabled:opacity-50"
+                                aria-label={`Mark ${row.userName} no-show`}
                               >
                                 {isNoShowThis ? "Saving..." : "No-show"}
                               </button>
