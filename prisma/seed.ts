@@ -220,11 +220,12 @@ async function main() {
   });
 
   // One booking: Meera, 1 veg thali at today's lunch. quantityLeft above is already 39.
-  const thaliOffering = await prisma.offering.findUniqueOrThrow({
+  const thaliOffering = (await prisma.offering.findFirst({
     where: {
-      serviceId_menuItemId: { serviceId: todayLunch.id, menuItemId: thali.id },
+      serviceId: todayLunch.id,
+      menuItemId: thali.id,
     },
-  });
+  }))!;
 
   await prisma.booking.create({
     data: {

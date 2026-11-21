@@ -26,6 +26,12 @@ enum BookingStatus {
   NO_SHOW
 }
 
+enum WaitlistStatus {
+  ACTIVE
+  LEFT
+  PROMOTED
+}
+
 enum ComplaintStatus {
   OPEN
   ACKNOWLEDGED
@@ -41,6 +47,7 @@ model User {
   bookings   Booking[]
   complaints Complaint[]
   reviews    Review[]
+  waitlist   Waitlist[]
 }
 
 model MenuItem {
@@ -80,8 +87,7 @@ model Offering {
   service       Service   @relation(fields: [serviceId], references: [id])
   menuItem      MenuItem  @relation(fields: [menuItemId], references: [id])
   bookings      Booking[]
-
-  @@unique([serviceId, menuItemId])
+  waitlist      Waitlist[]
 }
 
 model Booking {
@@ -121,4 +127,18 @@ model Review {
   menuItem   MenuItem @relation(fields: [menuItemId], references: [id])
 
   @@unique([userId, menuItemId])
+}
+
+model Waitlist {
+  id           String   @id @default(cuid())
+  userId       String
+  offeringId   String
+  position     Int      @default(1)
+  status       WaitlistStatus @default(ACTIVE)
+  createdAt    DateTime @default(now())
+
+  user         User     @relation(fields: [userId], references: [id])
+  offering     Offering @relation(fields: [offeringId], references: [id])
+
+  @@unique([userId, offeringId])
 }

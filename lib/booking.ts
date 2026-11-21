@@ -1,4 +1,4 @@
-import { BookingStatus } from "@prisma/client";
+import { BookingStatus, WaitlistStatus } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "./db";
 
@@ -10,11 +10,24 @@ export type BookingFailure =
   | "NOT_PUBLISHED"
   | "CUTOFF_PASSED"
   | "ALREADY_BOOKED"
-  | "SOLD_OUT";
+  | "SOLD_OUT"
+  | "ALREADY_ON_WAITLIST";
 
 export type BookPlatesResult =
   | { ok: true; bookingId: string }
-  | { ok: false; reason: BookingFailure };
+  | { ok: false; reason: BookingFailure; position?: number; waitlistId?: string };
+
+export type WaitlistEntry = {
+  id: string;
+  position: number;
+  status: WaitlistStatus;
+  createdAt: Date;
+};
+
+export type WaitlistInfo = {
+  entries: WaitlistEntry[];
+  totalActive: number;
+};
 
 // Thrown inside the transaction so Prisma rolls everything back.
 class BookingError extends Error {
@@ -31,6 +44,9 @@ export async function bookPlates(
   const parsed = countSchema.safeParse(count);
   if (!parsed.success) return { ok: false, reason: "INVALID_COUNT" };
   const plates = parsed.data;
+
+  // First, attempt the booking inside a transaction (locks offering row, checks stock, creates booking if possible)
+  let waitlistInfo: { position: number; waitlistId: string } | null = null;
 
   try {
     const booking = await prisma.$transaction(async (tx) => {
@@ -54,6 +70,7 @@ export async function bookPlates(
         where: { id: offeringId, quantityLeft: { gte: plates } },
         data: { quantityLeft: { decrement: plates } },
       });
+
       if (updated.count === 0) throw new BookingError("SOLD_OUT");
 
       // 3. One open booking per student per offering. This runs after the
@@ -75,7 +92,42 @@ export async function bookPlates(
 
     return { ok: true, bookingId: booking.id };
   } catch (err) {
-    if (err instanceof BookingError) return { ok: false, reason: err.reason };
+    if (err instanceof BookingError) {
+      // Booking failed (SOLD_OUT or ALREADY_BOOKED). Now add to waitlist atomically.
+      // We check for existing waitlist entry first (uniqueness constraint handles duplicates).
+      // Check both ACTIVE and PROMOTED status - a PROMOTED entry means the student was already promoted.
+      const existingWaitlist = await prisma.waitlist.findFirst({
+        where: { userId, offeringId, status: { in: ["ACTIVE", "PROMOTED"] } },
+      });
+      if (existingWaitlist) {
+        waitlistInfo = {
+          position: existingWaitlist.position,
+          waitlistId: existingWaitlist.id,
+        };
+      } else {
+        // Add student to waitlist (FIFO: position = current active count + 1)
+        const maxPosResult = await prisma.waitlist.findFirst({
+          where: { offeringId, status: "ACTIVE" },
+          select: { position: true },
+          orderBy: { position: "desc" },
+        });
+        const nextPosition = (maxPosResult?.position ?? 0) + 1;
+        const newWaitlistEntry = await prisma.waitlist.create({
+          data: { userId, offeringId, position: nextPosition, status: "ACTIVE" },
+          select: { id: true, position: true },
+        });
+        waitlistInfo = {
+          position: newWaitlistEntry.position,
+          waitlistId: newWaitlistEntry.id,
+        };
+      }
+      return {
+        ok: false,
+        reason: err.reason,
+        position: waitlistInfo?.position,
+        waitlistId: waitlistInfo?.waitlistId,
+      };
+    }
     throw err; // real errors (DB down, etc.) are not a failed booking
   }
 }
@@ -177,6 +229,9 @@ export async function cancelBooking(
         SET "quantityLeft" = LEAST("quantityLeft" + ${booking.count}, "quantityTotal")
         WHERE id = ${booking.offeringId}
       `;
+
+      // Promote the next FIFO waitlist entry atomically.
+      await promoteFromWaitlist(tx, booking.offeringId, booking.count);
     }
 
     const offering = await tx.offering.findUniqueOrThrow({
@@ -190,4 +245,74 @@ export async function cancelBooking(
       quantityLeft: offering.quantityLeft,
     };
   });
+}
+
+async function promoteFromWaitlist(tx: any, offeringId: string, count: number) {
+  // Find the first ACTIVE waitlist entry (FIFO = lowest position).
+  const waitlistEntry = await tx.waitlist.findFirst({
+    where: { offeringId, status: "ACTIVE" },
+    orderBy: { position: "asc" },
+  });
+
+  if (!waitlistEntry) return;
+
+  // Since we're already in the cancel transaction with the offering row locked,
+  // we can safely attempt the booking without a nested transaction.
+  // The offering lock prevents concurrent stock depletion.
+
+  // 1. Conditional decrement
+  const updated = await tx.offering.updateMany({
+    where: { id: offeringId, quantityLeft: { gte: count } },
+    data: { quantityLeft: { decrement: count } },
+  });
+  if (updated.count === 0) return; // still sold out, leave waitlist ACTIVE
+
+  // 2. One open booking per student per offering check
+  const existing = await tx.booking.findFirst({
+    where: { userId: waitlistEntry.userId, offeringId, status: "BOOKED" },
+    select: { id: true },
+  });
+  if (existing) {
+    // Student already has a booking; revert the decrement and leave waitlist ACTIVE.
+    await tx.offering.update({
+      where: { id: offeringId },
+      data: { quantityLeft: { increment: count } },
+    });
+    return;
+  }
+
+  // 3. Create the booking
+  await tx.booking.create({
+    data: { userId: waitlistEntry.userId, offeringId, count, status: "BOOKED" },
+  });
+
+  // 4. Mark the waitlist entry as PROMOTED
+  await tx.waitlist.update({
+    where: { id: waitlistEntry.id },
+    data: { status: "PROMOTED" },
+  });
+}
+
+export async function leaveWaitlist(userId: string, offeringId: string) {
+  const result = await prisma.$executeRaw`
+    DELETE FROM "Waitlist"
+    WHERE "userId" = ${userId} AND "offeringId" = ${offeringId} AND "status" = 'ACTIVE'
+  `;
+  // Return number of deleted rows (0 or 1)
+  return result > 0;
+}
+
+export async function inspectWaitlist(offeringId: string, limit = 20) {
+  const entries = await prisma.waitlist.findMany({
+    where: { offeringId },
+    orderBy: { position: "asc" },
+    take: limit,
+    select: { id: true, userId: true, position: true, createdAt: true, status: true },
+  });
+
+  const totalActive = await prisma.waitlist.count({
+    where: { offeringId, status: "ACTIVE" },
+  });
+
+  return { entries, totalActive };
 }
