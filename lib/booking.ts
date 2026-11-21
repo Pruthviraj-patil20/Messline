@@ -1,4 +1,4 @@
-import { BookingStatus, WaitlistStatus } from "@prisma/client";
+import { BookingStatus, Prisma, WaitlistStatus } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "./db";
 
@@ -247,7 +247,7 @@ export async function cancelBooking(
   });
 }
 
-async function promoteFromWaitlist(tx: any, offeringId: string, count: number) {
+async function promoteFromWaitlist(tx: Prisma.TransactionClient, offeringId: string, count: number) {
   // Find the first ACTIVE waitlist entry (FIFO = lowest position).
   const waitlistEntry = await tx.waitlist.findFirst({
     where: { offeringId, status: "ACTIVE" },

@@ -47,16 +47,17 @@ async function main() {
   // --- Test 1: Book the last plate, others go to waitlist ---
   console.log("Case 1: Book the last plate, others join waitlist");
   const b1 = await bookPlates(meera.id, offering.id, 1);
-  check("meera books the last plate", b1.ok === true, b1.reason);
+  check("meera books the last plate", b1.ok === true, b1.ok ? "" : b1.reason);
   const afterB1 = await prisma.offering.findUniqueOrThrow({ where: { id: offering.id }, select: { quantityLeft: true } });
   check("quantityLeft is 0 after booking", afterB1.quantityLeft === 0, "quantityLeft=" + afterB1.quantityLeft);
 
   // kabir tries to book but it's sold out -> should join waitlist
   const kWaitlist = await bookPlates(kabir.id, offering.id, 1);
+  const isWaitlist = !kWaitlist.ok && kWaitlist.reason === "SOLD_OUT" && typeof kWaitlist.position === "number" && typeof kWaitlist.waitlistId === "string";
   check("kabir joins waitlist (SOLD_OUT with position+waitlistId)", 
-    kWaitlist.reason === "SOLD_OUT" && typeof kWaitlist.position === "number" && typeof kWaitlist.waitlistId === "string",
-    "reason=" + kWaitlist.reason + " position=" + kWaitlist.position + " waitlistId=" + kWaitlist.waitlistId);
-  if (kWaitlist.reason === "SOLD_OUT" && kWaitlist.position !== undefined) {
+    isWaitlist,
+    !kWaitlist.ok ? `reason=${kWaitlist.reason} position=${kWaitlist.position} waitlistId=${kWaitlist.waitlistId}` : "unexpected ok");
+  if (!kWaitlist.ok && kWaitlist.reason === "SOLD_OUT" && kWaitlist.position !== undefined) {
     check("kabir is position 1 on waitlist", kWaitlist.position === 1, "position=" + kWaitlist.position);
   }
 
@@ -80,7 +81,8 @@ async function main() {
   await prisma.booking.deleteMany({ where: { offeringId: offering.id, userId: meera.id } });
   await prisma.offering.update({ where: { id: offering.id }, data: { quantityLeft: 1 } });
   const b2 = await bookPlates(meera.id, offering.id, 1); // meera takes last plate
-  check("meera books the last plate", b2.ok === true, b2.reason);
+  check("meera books the last plate", b2.ok === true, b2.ok ? "" : b2.reason);
+  if (!b2.ok) throw new Error("b2 booking failed");
 
   // kabir is already on waitlist from before, but let's re-join to test fresh
   await bookPlates(kabir.id, offering.id, 1); // kabir joins waitlist at position 1
@@ -109,7 +111,7 @@ async function main() {
   // --- Test 5: Duplicate join rejected (uniqueness constraint) ---
   console.log("\nCase 5: Duplicate waitlist entry rejected");
   // Try to add kabir to waitlist again - should be a no-op since already there
-  const dup = await bookPlates(kabir.id, offering.id, 1);
+  await bookPlates(kabir.id, offering.id, 1);
   // This will throw SOLD_OUT; check if waitlist entry still unique
   const wlCount = await prisma.waitlist.count({ where: { userId: kabir.id, offeringId: offering.id, status: "ACTIVE" } });
   check("kabir has at most one active waitlist entry", wlCount <= 1, "count=" + wlCount);
@@ -121,6 +123,7 @@ async function main() {
   await prisma.waitlist.deleteMany({ where: { offeringId: offering.id } });
   await prisma.offering.update({ where: { id: offering.id }, data: { quantityLeft: 1 } });
   const bFresh = await bookPlates(meera.id, offering.id, 1); // meera takes last plate
+  if (!bFresh.ok) throw new Error("bFresh booking failed");
   // Set cutoff to past immediately
   await prisma.service.update({
     where: { id: offering.serviceId },
