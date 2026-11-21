@@ -121,6 +121,9 @@ export default async function KitchenBookingsPage() {
             <h2 className="text-lg font-medium">
               {mealLabel(group.meal)}, {dateLabel(group.serviceDate)}
             </h2>
+            <span className="ml-2 text-sm font-normal text-neutral-500">
+              {group.rows.reduce((sum, row) => sum + row.count, 0)} plate{group.rows.reduce((sum, row) => sum + row.count, 0) !== 1 ? "s" : ""}
+            </span>
             <ul className="mt-2 divide-y divide-neutral-200 border-y border-neutral-200 text-sm">
               {group.rows.map((row) => (
                 <li
